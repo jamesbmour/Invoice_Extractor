@@ -159,7 +159,7 @@ def main():
     st.title("Invoice Extractor (LangChain + Ollama + LangGraph)")
     st.write("Upload an invoice PDF or image and extract structured fields.")
 
-    model = st.text_input("Ollama model", value="qwen3-vl:2b")
+    model = st.text_input("Ollama model", value="ministral-3:3b")
     uploaded_file = st.file_uploader(
         "Upload invoice",
         type=["pdf", "png", "jpg", "jpeg"],
