@@ -166,14 +166,21 @@ def main():
     )
 
     if uploaded_file:
+        file_bytes = uploaded_file.getvalue()
         st.write(f"File: `{uploaded_file.name}`")
         if uploaded_file.type.startswith("image/"):
             st.image(
                 uploaded_file, caption=uploaded_file.name 
             )
+        if uploaded_file.type == "application/pdf":
+            pdf_b64 = base64.b64encode(file_bytes).decode("utf-8")
+            pdf_preview = (
+                f'<embed src="data:application/pdf;base64,{pdf_b64}" '
+                'width="100%" height="700" type="application/pdf">'
+            )
+            st.markdown(pdf_preview, unsafe_allow_html=True)
 
         if st.button("Extract Information", type="primary"):
-            file_bytes = uploaded_file.getvalue()
             graph = build_graph()
             result = graph.invoke(
                 {
