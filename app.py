@@ -179,6 +179,27 @@ def build_graph():
 
 #%%
 ################################ Streamlit UI ################################
+def process_invoice(uploaded_file, file_bytes, model):
+    graph = build_graph()
+    result = graph.invoke(
+        {
+            "file_name": uploaded_file.name,
+            "file_type": uploaded_file.type,
+            "file_bytes": file_bytes,
+            "model": model,
+        }
+    )
+
+    # Present the structured data and raw logs
+    st.subheader("Extracted Invoice JSON")
+    st.json(result["extracted_fields"])
+
+    with st.expander("Raw model output"):
+        st.code(result["raw_response"], language="json")
+
+    if uploaded_file.type == "application/pdf":
+        with st.expander("Extracted PDF text"):
+            st.text(result["invoice_text"])
 
 def main():
     st.set_page_config(page_title="Invoice Extractor", page_icon=":receipt:")
@@ -194,11 +215,11 @@ def main():
     if uploaded_file:
         file_bytes = uploaded_file.getvalue()
         st.write(f"File: `{uploaded_file.name}`")
-        
+
         # Display visual preview based on MIME type
         if uploaded_file.type.startswith("image/"):
             st.image(uploaded_file, caption=uploaded_file.name)
-            
+
         if uploaded_file.type == "application/pdf":
             # Render PDF in an iframe using base64 encoding
             pdf_b64 = base64.b64encode(file_bytes).decode("utf-8")
@@ -210,26 +231,8 @@ def main():
 
         # Trigger the LangGraph workflow execution
         if st.button("Extract Information", type="primary"):
-            graph = build_graph()
-            result = graph.invoke(
-                {
-                    "file_name": uploaded_file.name,
-                    "file_type": uploaded_file.type,
-                    "file_bytes": file_bytes,
-                    "model": model,
-                }
-            )
+            process_invoice(uploaded_file, file_bytes, model)
 
-            # Present the structured data and raw logs
-            st.subheader("Extracted Invoice JSON")
-            st.json(result["extracted_fields"])
-
-            with st.expander("Raw model output"):
-                st.code(result["raw_response"], language="json")
-
-            if uploaded_file.type == "application/pdf":
-                with st.expander("Extracted PDF text"):
-                    st.text(result["invoice_text"])
 
 
 if __name__ == "__main__":
