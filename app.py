@@ -8,7 +8,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph
 from pypdf import PdfReader
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://eos.local:11434")
 
 class InvoiceState(TypedDict, total=False):
     file_name: str
@@ -72,7 +77,7 @@ def parse_model_json(text: str) -> dict:
 
 
 def extract_invoice_node(state: InvoiceState) -> InvoiceState:
-    llm = ChatOllama(model=state["model"], temperature=0, format="json")
+    llm = ChatOllama(model=state["model"], temperature=0, format="json", base_url=OLLAMA_BASE_URL)
 
     if state["file_type"] == "application/pdf":
         user_prompt = (
