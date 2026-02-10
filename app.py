@@ -13,8 +13,13 @@ import os
 
 load_dotenv()
 
+# Set the endpoint for the local Ollama instance
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://eos.local:11434")
 
+#%%
+################################ State Definitions ################################
+
+# Define the data structure passed between graph nodes
 class InvoiceState(TypedDict, total=False):
     file_name: str
     file_type: str
@@ -25,6 +30,7 @@ class InvoiceState(TypedDict, total=False):
     extracted_fields: dict
 
 
+# Define the instruction set for the LLM to ensure consistent JSON output
 SYSTEM_PROMPT = """You extract structured invoice data.
 Return valid JSON only.
 
@@ -48,20 +54,18 @@ Include these keys:
 
 Use null when a field is missing."""
 
+#%%
+################################ Utility Functions ################################
 
 def extract_pdf_text(file_bytes: bytes) -> str:
+    # Iterate through PDF pages and concatenate text content
     reader = PdfReader(BytesIO(file_bytes))
     page_texts = [page.extract_text() or "" for page in reader.pages]
     return "\n\n".join(page_texts)
 
 
-def load_document_node(state: InvoiceState) -> InvoiceState:
-    if state["file_type"] == "application/pdf":
-        return {"invoice_text": extract_pdf_text(state["file_bytes"])}
-    return {"invoice_text": ""}
-
-
 def parse_model_json(text: str) -> dict:
+    # Strip markdown code blocks if the model wrapped the JSON response
     cleaned = text.strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned[len("```json") :].strip()
@@ -69,6 +73,8 @@ def parse_model_json(text: str) -> dict:
         cleaned = cleaned[len("```") :].strip()
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3].strip()
+    
+    # Locate and decode the first valid JSON object or list found in the string
     decoder = json.JSONDecoder()
     for i, ch in enumerate(cleaned):
         if ch not in "{[":
@@ -85,6 +91,7 @@ def parse_model_json(text: str) -> dict:
 
 
 def normalize_response_content(content) -> str:
+    # Convert various LangChain message content types into a standard string format
     if isinstance(content, str):
         return content
     if isinstance(content, dict):
@@ -103,10 +110,21 @@ def normalize_response_content(content) -> str:
         return "\n".join(parts)
     return str(content)
 
+#%%
+################################ Graph Nodes ################################
+
+def load_document_node(state: InvoiceState) -> InvoiceState:
+    # Process PDF files into text; skip processing for images as they are handled via vision
+    if state["file_type"] == "application/pdf":
+        return {"invoice_text": extract_pdf_text(state["file_bytes"])}
+    return {"invoice_text": ""}
+
 
 def extract_invoice_node(state: InvoiceState) -> InvoiceState:
+    # Initialize the LLM with strict JSON formatting and zero temperature for reproducibility
     llm = ChatOllama(model=state["model"], temperature=0, format="json", base_url=OLLAMA_BASE_URL)
 
+    # Route logic based on file type: use text extraction for PDFs or base64 encoding for images
     if state["file_type"] == "application/pdf":
         user_prompt = (
             "Extract all invoice information from this invoice text.\n\n"
@@ -119,6 +137,7 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
             ]
         )
     else:
+        # Encode image for multimodal model consumption
         encoded = base64.b64encode(state["file_bytes"]).decode("utf-8")
         response = llm.invoke(
             [
@@ -142,17 +161,24 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
     extracted_fields = parse_model_json(raw_response)
     return {"raw_response": raw_response, "extracted_fields": extracted_fields}
 
+#%%
+################################ LangGraph Workflow ################################
 
 @st.cache_resource
 def build_graph():
+    # Define the execution flow: Load Document -> Extract Data -> End
     graph = StateGraph(InvoiceState)
     graph.add_node("load_document", load_document_node)
     graph.add_node("extract_invoice", extract_invoice_node)
+    
     graph.set_entry_point("load_document")
     graph.add_edge("load_document", "extract_invoice")
     graph.add_edge("extract_invoice", END)
+    
     return graph.compile()
 
+#%%
+################################ Streamlit UI ################################
 
 def main():
     st.set_page_config(page_title="Invoice Extractor", page_icon=":receipt:")
@@ -168,11 +194,13 @@ def main():
     if uploaded_file:
         file_bytes = uploaded_file.getvalue()
         st.write(f"File: `{uploaded_file.name}`")
+        
+        # Display visual preview based on MIME type
         if uploaded_file.type.startswith("image/"):
-            st.image(
-                uploaded_file, caption=uploaded_file.name 
-            )
+            st.image(uploaded_file, caption=uploaded_file.name)
+            
         if uploaded_file.type == "application/pdf":
+            # Render PDF in an iframe using base64 encoding
             pdf_b64 = base64.b64encode(file_bytes).decode("utf-8")
             pdf_preview = (
                 f'<embed src="data:application/pdf;base64,{pdf_b64}" '
@@ -180,6 +208,7 @@ def main():
             )
             st.markdown(pdf_preview, unsafe_allow_html=True)
 
+        # Trigger the LangGraph workflow execution
         if st.button("Extract Information", type="primary"):
             graph = build_graph()
             result = graph.invoke(
@@ -191,6 +220,7 @@ def main():
                 }
             )
 
+            # Present the structured data and raw logs
             st.subheader("Extracted Invoice JSON")
             st.json(result["extracted_fields"])
 
