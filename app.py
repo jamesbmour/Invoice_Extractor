@@ -64,11 +64,15 @@ def parse_model_json(text: str) -> dict:
         cleaned = cleaned[len("```") :].strip()
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3].strip()
+    if "{" in cleaned and "}" in cleaned:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}") + 1
+        cleaned = cleaned[start:end]
     return json.loads(cleaned)
 
 
 def extract_invoice_node(state: InvoiceState) -> InvoiceState:
-    llm = ChatOllama(model=state["model"], temperature=0)
+    llm = ChatOllama(model=state["model"], temperature=0, format="json")
 
     if state["file_type"] == "application/pdf":
         user_prompt = (
