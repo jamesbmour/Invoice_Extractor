@@ -69,11 +69,39 @@ def parse_model_json(text: str) -> dict:
         cleaned = cleaned[len("```") :].strip()
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3].strip()
-    if "{" in cleaned and "}" in cleaned:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}") + 1
-        cleaned = cleaned[start:end]
-    return json.loads(cleaned)
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(cleaned):
+        if ch not in "{[":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(cleaned[i:])
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, list):
+                return {"line_items": parsed}
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
+def normalize_response_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return content["text"]
+        return json.dumps(content)
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            else:
+                parts.append(json.dumps(item))
+        return "\n".join(parts)
+    return str(content)
 
 
 def extract_invoice_node(state: InvoiceState) -> InvoiceState:
@@ -110,11 +138,7 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
             ]
         )
 
-    raw_response = (
-        response.content
-        if isinstance(response.content, str)
-        else json.dumps(response.content)
-    )
+    raw_response = normalize_response_content(response.content)
     extracted_fields = parse_model_json(raw_response)
     return {"raw_response": raw_response, "extracted_fields": extracted_fields}
 
