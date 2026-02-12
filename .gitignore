@@ -205,3 +205,5 @@ Plotly_Dash_Dashboards/01-Plotly_Basics_Charts/12-Sankey_Diagram/archive
 .*/
 # Except for this one
 !/.github/
+# ignore all files with name dev at the start and any extension
+dev-*.*
