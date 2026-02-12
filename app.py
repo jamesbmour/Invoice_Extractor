@@ -92,72 +92,6 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     return "\n\n".join(page_texts)
 
 
-def normalize_message_content(content: Any) -> str:
-    """Convert LangChain message content into a plain string."""
-    # Depending on model/provider settings, content may be string/dict/list.
-    # Normalizing early keeps the parser below simple and deterministic.
-    if isinstance(content, str):
-        return content
-
-    if isinstance(content, dict):
-        if isinstance(content.get("text"), str):
-            return content["text"]
-        return json.dumps(content)
-
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
-            else:
-                parts.append(json.dumps(item))
-        return "\n".join(parts)
-
-    return str(content)
-
-
-def remove_markdown_fences(text: str) -> str:
-    """Strip markdown code fences around model output, if present."""
-    cleaned = text.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[len("```json") :].strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned[len("```") :].strip()
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3].strip()
-    return cleaned
-
-
-def parse_first_json_block(text: str) -> dict[str, Any]:
-    """
-    Parse the first JSON object/array found in a string.
-
-    Some models prepend or append extra text; this parser is tolerant of that.
-    """
-    cleaned = remove_markdown_fences(text)
-    decoder = json.JSONDecoder()
-
-    # Scan for the first "{" or "[" and try decoding from there.
-    # This helps when the model includes extra leading text.
-    for index, char in enumerate(cleaned):
-        if char not in "{[":
-            continue
-
-        try:
-            parsed, _ = decoder.raw_decode(cleaned[index:])
-        except json.JSONDecodeError:
-            continue
-
-        if isinstance(parsed, dict):
-            return parsed
-        if isinstance(parsed, list):
-            return {"line_items": parsed}
-
-    return {}
-
-
 def build_pdf_extraction_prompt(invoice_text: str) -> str:
     """Create the prompt used when a PDF has already been converted to text."""
     return f"Extract all invoice information from this invoice text.\n\n{invoice_text}"
@@ -196,7 +130,7 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
         format="json",
         base_url=OLLAMA_BASE_URL,
     )
-
+    # Depending on the file type, we send a different prompt format and content to Ollama.
     if is_pdf(state["file_type"]):
         # PDF path: send extracted text.
         response = llm.invoke(
@@ -225,12 +159,7 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
         raw_response = json.dumps(response.content)
     else:
         raw_response = str(response.content).strip()
-        try:
-            extracted_fields = json.loads(raw_response)
-        except json.JSONDecodeError:
-            # Fallback for occasional provider/model deviations.
-            raw_response = normalize_message_content(response.content)
-            extracted_fields = parse_first_json_block(raw_response)
+        extracted_fields = json.loads(raw_response)
 
     return {"raw_response": raw_response, "extracted_fields": extracted_fields}
 
@@ -268,10 +197,11 @@ def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name
 # ================================ UI Helpers ================================= #
 def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> None:
     """Render a preview for image or PDF uploads."""
+    # For images, we can render directly in Streamlit.
     if file_type.startswith("image/"):
         st.image(file_bytes, caption=file_name)
         return
-
+    # For PDFs, we create a base64-encoded embed preview since Streamlit doesn't support PDFs natively.
     if is_pdf(file_type):
         pdf_b64 = base64.b64encode(file_bytes).decode("utf-8")
         pdf_preview = (
@@ -285,11 +215,13 @@ def render_results(result: InvoiceState, file_type: str) -> None:
     """Render structured output plus optional debug sections."""
     # Show parsed JSON first (the main output), then diagnostics.
     st.subheader("Extracted Invoice JSON")
+    # We use .get with defaults to avoid errors if the graph nodes didn't produce expected keys.
     st.json(result.get("extracted_fields", {}))
 
     with st.expander("Raw model output"):
         st.code(result.get("raw_response", ""), language="json")
-
+        
+    # For PDFs, show the extracted text in a collapsible section. Don't show for images since we didn't extract text in that case.
     if is_pdf(file_type):
         with st.expander("Extracted PDF text"):
             st.text(result.get("invoice_text", ""))
@@ -307,7 +239,8 @@ def main() -> None:
     # Step 2: Collect user inputs.
     model_name = st.text_input("Ollama model", value=DEFAULT_MODEL_NAME)
     uploaded_file = st.file_uploader("Upload invoice", type=SUPPORTED_UPLOAD_TYPES)
-
+    
+    # Don't proceed until a file is uploaded.
     if not uploaded_file:
         return
 
@@ -318,6 +251,7 @@ def main() -> None:
 
     # Step 4: Reset previous results when the file changes.
     file_signature = (uploaded_file.name, uploaded_file.type, len(file_bytes))
+    # We use a simple signature of the file (name, type, size) to detect changes. In a production app, you might want a more robust method (like hashing).
     if st.session_state.get("active_file_signature") != file_signature:
         st.session_state["active_file_signature"] = file_signature
         st.session_state["extraction_result"] = None
