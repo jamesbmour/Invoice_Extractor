@@ -31,19 +31,6 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://eos.local:11434")
 # ── Streamlit page config ────────────────────────────────────────────────────
 st.set_page_config(page_title="Invoice Extractor", page_icon="🧾", layout="wide")
 
-# ── Custom CSS for a clean, professional look ────────────────────────────────
-st.markdown("""<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
-.result-card { background: linear-gradient(135deg,#1a1f2e,#151922); border: 1px solid #2a3040;
-    border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
-.result-card h3 { color: #60a5fa; margin-bottom: .5rem; font-size: .85rem;
-    text-transform: uppercase; letter-spacing: 1.5px; }
-.result-card p { color: #e2e8f0; font-size: 1.1rem; margin: 0; }
-.status-badge { display: inline-block; background: #1e3a5f; color: #60a5fa;
-    padding: .25rem .75rem; border-radius: 20px; font-size: .8rem; font-weight: 500; }
-</style>""", unsafe_allow_html=True)
-
 
 # ── State schema for LangGraph ───────────────────────────────────────────────
 class InvoiceState(TypedDict):
@@ -57,11 +44,12 @@ def file_to_base64_image(uploaded_file) -> str:
     """Convert an uploaded PDF or image to a base64-encoded PNG string."""
     file_bytes = uploaded_file.read()
     mime = uploaded_file.type
-
+    # For PDFs, convert the first page to an image. For images, open directly.
     if mime == "application/pdf":
         images = convert_from_bytes(file_bytes, first_page=1, last_page=1, dpi=200)
         img = images[0]
     else:
+        # For images, we can directly open them with PIL
         img = Image.open(io.BytesIO(file_bytes))
 
     buf = io.BytesIO()
@@ -107,15 +95,19 @@ def parse_fields(state: InvoiceState) -> dict:
         "CUSTOMER_NAME", "CUSTOMER_ADDRESS", "SUBTOTAL", "TAX", "TOTAL",
         "CURRENCY", "PAYMENT_TERMS", "LINE_ITEMS", "NOTES",
     ]
-
+    # Simple line-by-line parsing based on expected keys
     for line in raw.strip().split("\n"):
+        # Check if the line starts with any of the expected field keys
         for key in field_keys:
-            if line.strip().upper().startswith(key + ":"):
+            # Match lines that start with the key followed by a colon, ignoring case
+            if line.strip().upper().startswith(f"{key}:"):
                 value = line.split(":", 1)[1].strip()
-                fields[key] = value if value else "N/A"
+                # Handle empty values
+                fields[key] = value or "N/A"
 
     # Fill any missing fields
     for key in field_keys:
+        # Check if the line starts with any of the expected field keys
         if key not in fields:
             fields[key] = "N/A"
 
@@ -163,17 +155,25 @@ def main():
     st.markdown("Upload a PDF or image invoice to extract structured data using a **local LLM** via Ollama.")
     st.markdown("---")
 
+    # ── Custom CSS for a clean, professional look ────────────────────────────────
+    st.markdown("""<style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
+    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+    .result-card { background: linear-gradient(135deg,#1a1f2e,#151922); border: 1px solid #2a3040;
+        border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+    .result-card h3 { color: #60a5fa; margin-bottom: .5rem; font-size: .85rem;
+        text-transform: uppercase; letter-spacing: 1.5px; }
+    .result-card p { color: #e2e8f0; font-size: 1.1rem; margin: 0; }
+    .status-badge { display: inline-block; background: #1e3a5f; color: #60a5fa;
+        padding: .25rem .75rem; border-radius: 20px; font-size: .8rem; font-weight: 500; }
+    </style>""", unsafe_allow_html=True)
+
     # Sidebar config
     with st.sidebar:
         st.markdown("### ⚙️ Configuration")
         model_name = st.text_input("Ollama Model", value="llava",
                                    help="Vision-capable model (e.g. llava, llava:13b, bakllava)")
         st.session_state["model_name"] = model_name
-        st.markdown("---")
-        st.markdown("**How it works:** Upload → LLM extracts via Ollama → "
-                    "Fields parsed → Critical fields validated")
-        st.markdown('<p style="color:#64748b;font-size:.8rem;">LangChain · LangGraph · Ollama</p>',
-                    unsafe_allow_html=True)
 
     # File uploader
     col_upload, col_preview = st.columns([1, 1])
@@ -202,85 +202,102 @@ def main():
             uploaded_file.seek(0)
 
             with st.status("Processing invoice...", expanded=True) as status:
-                st.write("📸 Converting to image...")
-                image_b64 = file_to_base64_image(uploaded_file)
-
-                st.write(f"🤖 Sending to **{model_name}** via Ollama...")
-                pipeline = build_graph()
-
-                initial_state: InvoiceState = {
-                    "image_b64": image_b64,
-                    "raw_text": "",
-                    "structured_data": {},
-                }
-
-                result = pipeline.invoke(initial_state)
-                status.update(label="✅ Extraction complete!", state="complete")
-
+                result = process_invoice(uploaded_file, model_name, status)
             # Store results
             st.session_state["result"] = result
 
     # Display results
     if "result" in st.session_state:
-        result = st.session_state["result"]
-        data = result["structured_data"]
-        validation = data.pop("_VALIDATION", "")
+        render_results()
 
-        st.markdown("## Extracted Data")
-        st.markdown(f'<span class="status-badge">{validation}</span>', unsafe_allow_html=True)
-        st.markdown("")
 
-        # Key financial fields in a highlight row
-        fin_cols = st.columns(4)
-        highlight_fields = ["INVOICE_NUMBER", "DATE", "TOTAL", "CURRENCY"]
-        for col, key in zip(fin_cols, highlight_fields):
-            with col:
-                render_field_card(key, data.get(key, "N/A"))
 
-        # Vendor & Customer
-        st.markdown("### Parties")
-        party_cols = st.columns(2)
-        with party_cols[0]:
-            render_field_card("VENDOR_NAME", data.get("VENDOR_NAME", "N/A"))
-            render_field_card("VENDOR_ADDRESS", data.get("VENDOR_ADDRESS", "N/A"))
-        with party_cols[1]:
-            render_field_card("CUSTOMER_NAME", data.get("CUSTOMER_NAME", "N/A"))
-            render_field_card("CUSTOMER_ADDRESS", data.get("CUSTOMER_ADDRESS", "N/A"))
+def render_results():
+    """Render the extracted invoice data in a clean, organized layout."""
+    result = st.session_state["result"]
+    data = result["structured_data"]
+    validation = data.pop("_VALIDATION", "")
 
-        # Financial details
-        st.markdown("### Financials")
-        money_cols = st.columns(3)
-        with money_cols[0]:
-            render_field_card("SUBTOTAL", data.get("SUBTOTAL", "N/A"))
-        with money_cols[1]:
-            render_field_card("TAX", data.get("TAX", "N/A"))
-        with money_cols[2]:
-            render_field_card("DUE_DATE", data.get("DUE_DATE", "N/A"))
+    st.markdown("## Extracted Data")
+    st.markdown(f'<span class="status-badge">{validation}</span>', unsafe_allow_html=True)
+    st.markdown("")
 
-        # Line items
-        st.markdown("### Line Items")
-        render_field_card("LINE_ITEMS", data.get("LINE_ITEMS", "N/A"))
+    # Key financial fields in a highlight row
+    fin_cols = st.columns(4)
+    highlight_fields = ["INVOICE_NUMBER", "DATE", "TOTAL", "CURRENCY"]
+    for col, key in zip(fin_cols, highlight_fields):
+        with col:
+            render_field_card(key, data.get(key, "N/A"))
 
-        # Additional
-        additional_cols = st.columns(2)
-        with additional_cols[0]:
-            render_field_card("PAYMENT_TERMS", data.get("PAYMENT_TERMS", "N/A"))
-        with additional_cols[1]:
-            render_field_card("NOTES", data.get("NOTES", "N/A"))
+    # Vendor & Customer
+    st.markdown("### Parties")
+    party_cols = st.columns(2)
+    # Vendor info on the left, customer info on the right
+    with party_cols[0]:
+        render_field_card("VENDOR_NAME", data.get("VENDOR_NAME", "N/A"))
+        render_field_card("VENDOR_ADDRESS", data.get("VENDOR_ADDRESS", "N/A"))
+    # Customer info on the right
+    with party_cols[1]:
+        render_field_card("CUSTOMER_NAME", data.get("CUSTOMER_NAME", "N/A"))
+        render_field_card("CUSTOMER_ADDRESS", data.get("CUSTOMER_ADDRESS", "N/A"))
 
-        # Raw output expander
-        with st.expander("📄 Raw LLM Output"):
-            st.code(result["raw_text"], language="text")
+    # Financial details
+    st.markdown("### Financials")
+    money_cols = render_field_row(3, "SUBTOTAL", data, "TAX")
+    with money_cols[2]:
+        render_field_card("DUE_DATE", data.get("DUE_DATE", "N/A"))
 
-        # Download as JSON
-        import json
-        json_str = json.dumps(data, indent=2)
-        st.download_button(
-            "⬇️  Download as JSON",
-            data=json_str,
-            file_name="invoice_data.json",
-            mime="application/json",
-        )
+    # Line items
+    st.markdown("### Line Items")
+    render_field_card("LINE_ITEMS", data.get("LINE_ITEMS", "N/A"))
+
+    render_field_row(2, "PAYMENT_TERMS", data, "NOTES")
+    # Raw output expander
+    with st.expander("📄 Raw LLM Output"):
+        st.code(result["raw_text"], language="text")
+
+    # Download as JSON
+    import json
+    json_str = json.dumps(data, indent=2)
+    st.download_button(
+        "⬇️  Download as JSON",
+        data=json_str,
+        file_name="invoice_data.json",
+        mime="application/json",
+    )
+
+
+
+def process_invoice(uploaded_file, model_name, status):
+    """Process the uploaded file through the LangGraph pipeline."""
+    st.write("📸 Converting to image...")
+    image_b64 = file_to_base64_image(uploaded_file)
+
+    st.write(f"🤖 Sending to **{model_name}** via Ollama...")
+    pipeline = build_graph()
+    # Initialize the state with the base64 image and empty fields for text and structured data
+    initial_state: InvoiceState = {
+        "image_b64": image_b64,
+        "raw_text": "",
+        "structured_data": {},
+    }
+
+    result = pipeline.invoke(initial_state)
+    status.update(label="✅ Extraction complete!", state="complete")
+
+    return result
+
+
+def render_field_row(num_cols, key1, data, key2):
+    """Helper to render a row of two fields side by side."""
+    result = st.columns(num_cols)
+    # Render the first field in the first column and the second field in the second column
+    with result[0]:
+        render_field_card(key1, data.get(key1, "N/A"))
+    # Render the second field in the second column
+    with result[1]:
+        render_field_card(key2, data.get(key2, "N/A"))
+    return result
 
 
 if __name__ == "__main__":
