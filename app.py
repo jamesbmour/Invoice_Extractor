@@ -1,5 +1,5 @@
 """
-Teaching-friendly invoice extractor app.
+Invoice Extractor App using LangChain, Ollama, and LangGraph
 
 This module is intentionally split into layers:
 1. Configuration/constants
@@ -22,10 +22,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph
 from pypdf import PdfReader
-
-# Teaching note:
-# Read this file top-to-bottom when presenting:
-# configuration -> helpers -> graph nodes -> UI entry point.
 
 # Load values from .env (for example: OLLAMA_BASE_URL).
 load_dotenv()
@@ -82,28 +78,18 @@ class InvoiceState(TypedDict, total=False):
 # ================================ Pure Helpers =============================== #
 def is_pdf(file_type: str) -> bool:
     """Return True when the upload MIME type is a PDF."""
-    return file_type == "application/pdf"
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     """Extract raw text from each PDF page and combine it into one string."""
-    reader = PdfReader(BytesIO(file_bytes))
-    page_texts = [page.extract_text() or "" for page in reader.pages]
-    return "\n\n".join(page_texts)
 
 
 def build_pdf_extraction_prompt(invoice_text: str) -> str:
     """Create the prompt used when a PDF has already been converted to text."""
-    return f"Extract all invoice information from this invoice text.\n\n{invoice_text}"
 
 
 def build_image_message(file_bytes: bytes, file_type: str) -> list[dict[str, str]]:
     """Build the multimodal message content for an image-based extraction call."""
-    encoded = base64.b64encode(file_bytes).decode("utf-8")
-    return [
-        {"type": "text", "text": "Extract all invoice information from this image."},
-        {"type": "image_url", "image_url": f"data:{file_type};base64,{encoded}"},
-    ]
 
 
 # ================================ Graph Nodes ================================ #
@@ -114,117 +100,29 @@ def load_document_node(state: InvoiceState) -> InvoiceState:
     For PDFs we extract text.
     For images we skip this step (vision model reads pixels directly).
     """
-    # Graph nodes should be easy to explain as pure transforms:
-    # input state -> output delta.
-    if is_pdf(state["file_type"]):
-        return {"invoice_text": extract_text_from_pdf(state["file_bytes"])}
-    return {"invoice_text": ""}
 
 
 def extract_invoice_node(state: InvoiceState) -> InvoiceState:
     """Node 2: Send document content to Ollama and parse JSON response."""
-    # temperature=0 for repeatable demos while teaching.
-    llm = ChatOllama(
-        model=state["model_name"],
-        temperature=0,
-        format="json",
-        base_url=OLLAMA_BASE_URL,
-    )
-    # Depending on the file type, we send a different prompt format and content to Ollama.
-    if is_pdf(state["file_type"]):
-        # PDF path: send extracted text.
-        response = llm.invoke(
-            [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=build_pdf_extraction_prompt(state["invoice_text"])),
-            ]
-        )
-    else:
-        # Image path: send a multimodal message with base64 image data.
-        response = llm.invoke(
-            [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(
-                    content=build_image_message(
-                        file_bytes=state["file_bytes"],
-                        file_type=state["file_type"],
-                    )
-                ),
-            ]
-        )
-
-    # With format="json", Ollama should return JSON directly (string or dict).
-    if isinstance(response.content, dict):
-        extracted_fields = response.content
-        raw_response = json.dumps(response.content)
-    else:
-        raw_response = str(response.content).strip()
-        extracted_fields = json.loads(raw_response)
-
-    return {"raw_response": raw_response, "extracted_fields": extracted_fields}
 
 
 # ================================ Graph Builder ============================== #
 @st.cache_resource
 def build_invoice_graph():
     """Create and cache the LangGraph workflow."""
-    graph = StateGraph(InvoiceState)
-    graph.add_node("load_document", load_document_node)
-    graph.add_node("extract_invoice", extract_invoice_node)
-
-    # Linear graph keeps the initial teaching example simple:
-    # load_document -> extract_invoice -> END
-    graph.set_entry_point("load_document")
-    graph.add_edge("load_document", "extract_invoice")
-    graph.add_edge("extract_invoice", END)
-    return graph.compile()
 
 
 def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name: str) -> InvoiceState:
     """Run the full extraction workflow and return final graph state."""
-    # Keep workflow execution in one function so the UI layer stays focused on UX.
-    graph = build_invoice_graph()
-    return graph.invoke(
-        {
-            "file_name": file_name,
-            "file_type": file_type,
-            "file_bytes": file_bytes,
-            "model_name": model_name,
-        }
-    )
 
 
 # ================================ UI Helpers ================================= #
 def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> None:
     """Render a preview for image or PDF uploads."""
-    # For images, we can render directly in Streamlit.
-    if file_type.startswith("image/"):
-        st.image(file_bytes, caption=file_name)
-        return
-    # For PDFs, we create a base64-encoded embed preview since Streamlit doesn't support PDFs natively.
-    if is_pdf(file_type):
-        pdf_b64 = base64.b64encode(file_bytes).decode("utf-8")
-        pdf_preview = (
-            f'<embed src="data:application/pdf;base64,{pdf_b64}" '
-            'width="100%" height="700" type="application/pdf">'
-        )
-        st.markdown(pdf_preview, unsafe_allow_html=True)
 
 
 def render_results(result: InvoiceState, file_type: str) -> None:
     """Render structured output plus optional debug sections."""
-    # Show parsed JSON first (the main output), then diagnostics.
-    st.subheader("Extracted Invoice JSON")
-    # We use .get with defaults to avoid errors if the graph nodes didn't produce expected keys.
-    st.json(result.get("extracted_fields", {}))
-
-    with st.expander("Raw model output"):
-        st.code(result.get("raw_response", ""), language="json")
-        
-    # For PDFs, show the extracted text in a collapsible section. Don't show for images since we didn't extract text in that case.
-    if is_pdf(file_type):
-        with st.expander("Extracted PDF text"):
-            st.text(result.get("invoice_text", ""))
 
 
 
