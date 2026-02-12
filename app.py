@@ -219,9 +219,19 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
             ]
         )
 
-    # Parse in two phases: normalize model output -> parse first JSON payload.
-    raw_response = normalize_message_content(response.content)
-    extracted_fields = parse_first_json_block(raw_response)
+    # With format="json", Ollama should return JSON directly (string or dict).
+    if isinstance(response.content, dict):
+        extracted_fields = response.content
+        raw_response = json.dumps(response.content)
+    else:
+        raw_response = str(response.content).strip()
+        try:
+            extracted_fields = json.loads(raw_response)
+        except json.JSONDecodeError:
+            # Fallback for occasional provider/model deviations.
+            raw_response = normalize_message_content(response.content)
+            extracted_fields = parse_first_json_block(raw_response)
+
     return {"raw_response": raw_response, "extracted_fields": extracted_fields}
 
 
