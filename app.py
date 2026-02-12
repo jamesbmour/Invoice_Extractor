@@ -14,7 +14,7 @@ import os
 load_dotenv()
 
 # Set the endpoint for the local Ollama instance
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://eos.local:11434")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 #%%
 ################################ State Definitions ################################
