@@ -2,6 +2,9 @@
 
 FROM python:3.13-slim
 
+# Copy the uv binary from the official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 # Set the working directory to /app
 WORKDIR /app
 ENV PORT=8505
@@ -15,11 +18,11 @@ RUN apt-get update && apt-get install -y \
 # Copy all application files from the repository
 COPY . .
 
-# Install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# Install Python dependencies using uv
+# Using --system to install globally in the container's Python environment
+RUN uv pip install --system -r requirements.txt
 
-# Set the working directory to Pricing_app
+# Set the working directory
 WORKDIR /app
 
 # Expose the Streamlit port
