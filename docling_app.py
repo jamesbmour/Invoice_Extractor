@@ -20,6 +20,7 @@ from pdf2image import convert_from_bytes
 
 ############################# Configuration ################################
 
+# Load environment variables from .env file
 load_dotenv()
 APP_TITLE = "Invoice Extractor (Docling + Ollama + LangGraph)"
 DEFAULT_MODEL_NAME = "ministral-3:3b"
@@ -118,6 +119,7 @@ def to_base64_images(file_type: str, file_bytes: bytes) -> list[tuple[str, str]]
             encoded_pages.append(("image/png", base64.b64encode(buffer.getvalue()).decode("utf-8")))
         return encoded_pages
 
+    # For non-PDF images, encode the raw bytes directly
     return [(file_type, base64.b64encode(file_bytes).decode("utf-8"))]
 
 
@@ -125,14 +127,20 @@ def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str
     """Build the multimodal message content using all pages for PDF inputs."""
     images = to_base64_images(file_type, file_bytes)
     prompt = "Extract all invoice information from this document image."
+
+    # For PDFs, explicitly tell the model to use all pages since they are sent as separate images
     if file_type == "application/pdf":
         prompt = (
             f"Extract all invoice information from this {len(images)}-page PDF. "
             "Use all pages before returning JSON."
         )
 
+    # Start content list with the text prompt, then append each image
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+
+    # Append each image with an optional page label for multi-page PDFs
     for page_number, (mime, image_b64) in enumerate(images, start=1):
+        # For non-PDFs, we can just send the single image without a page number prompt since it's obvious to the model that there's only one image
         if file_type == "application/pdf":
             content.append({"type": "text", "text": f"PDF page {page_number}"})
         content.append(
@@ -146,6 +154,7 @@ def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str
 
 def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
     """Parse the LLM response content into a raw string and a JSON dict."""
+    # Handle already-parsed dict responses
     if isinstance(content, dict):
         return json.dumps(content), content
 
@@ -179,6 +188,7 @@ def load_document_node(state: InvoiceState) -> InvoiceState:
     # Skip text extraction when using the multimodal pipeline
     if state.get("extraction_mode") == MODE_MULTIMODAL:
         return {"invoice_text": ""}
+
     # For the Docling pipeline, extract text from the document and add it to the state
     return {
         "invoice_text": extract_text_with_docling(
@@ -224,10 +234,14 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
 def build_invoice_graph():
     """Build and compile the two-node LangGraph extraction workflow."""
     graph = StateGraph(InvoiceState)
+
+    # Register the two processing nodes
     graph.add_node("load_document", load_document_node)
     graph.add_node("extract_invoice", extract_invoice_node)
+
+    # Wire the linear pipeline: load → extract → done
     graph.set_entry_point("load_document")
-    graph.add_edge("load_document", "extract_invoice")  # Linear pipeline: load → extract → done
+    graph.add_edge("load_document", "extract_invoice")
     graph.add_edge("extract_invoice", END)
     return graph.compile()
 
@@ -273,7 +287,7 @@ def render_results(result: InvoiceState, extraction_mode: str) -> None:
     """Display the extraction results and optional debug expandables."""
     st.subheader("Extracted Invoice JSON")
     st.json(result.get("extracted_fields", {}))
-    
+
     with st.expander("Raw model output"):
         st.code(result.get("raw_response", ""), language="json")
 
@@ -298,7 +312,7 @@ def main() -> None:
     extraction_mode_label = st.sidebar.radio("Extraction method", list(MODE_OPTIONS))
     extraction_mode = MODE_OPTIONS[extraction_mode_label]
     uploaded_file = st.sidebar.file_uploader("Upload invoice", type=SUPPORTED_UPLOAD_TYPES)
-    
+
     # If no file is uploaded, skip the rest of the app
     if not uploaded_file:
         return
@@ -306,9 +320,6 @@ def main() -> None:
     file_bytes = uploaded_file.getvalue()
     st.write(f"File: `{uploaded_file.name}`")
     render_file_preview(uploaded_file.type, uploaded_file.name, file_bytes)
-    # Show a note about how PDFs are handled in multimodal mode since that may not be obvious to users
-    if extraction_mode == MODE_MULTIMODAL and uploaded_file.type == "application/pdf":
-        st.caption("Multimodal mode uses every PDF page as image input.")
 
     # Trigger extraction and store results in session state for persistence
     if st.button("Extract Information", type="primary"):
