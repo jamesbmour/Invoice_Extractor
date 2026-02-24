@@ -114,6 +114,7 @@ def to_base64_image(file_type: str, file_bytes: bytes) -> tuple[str, str]:
         image = convert_from_bytes(file_bytes, first_page=1, last_page=1, dpi=200)[0]
         buffer = BytesIO()
         image.save(buffer, format="PNG")
+        # Return the MIME type and base64-encoded image data URI
         return "image/png", base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     return file_type, base64.b64encode(file_bytes).decode("utf-8")
@@ -127,12 +128,15 @@ def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
     # Handle list-type responses by concatenating text parts
     if isinstance(content, list):
         parts: list[str] = []
+        # Iterate through list items, extracting text from strings and dicts, and converting others to strings
         for item in content:
+            # If the item is a string, append it directly
             if isinstance(item, str):
                 parts.append(item)
+            # If the item is a dict with a "text" key, extract that text
             elif isinstance(item, dict) and isinstance(item.get("text"), str):
                 parts.append(item["text"])
-            else:
+            else: # For any other type (e.g., dict without "text", numbers), convert to string and append
                 parts.append(str(item))
         raw = "\n".join(parts).strip()
     else:
@@ -151,7 +155,7 @@ def load_document_node(state: InvoiceState) -> InvoiceState:
     # Skip text extraction when using the multimodal pipeline
     if state.get("extraction_mode") == MODE_MULTIMODAL:
         return {"invoice_text": ""}
-
+    # For the Docling pipeline, extract text from the document and add it to the state
     return {
         "invoice_text": extract_text_with_docling(
             file_name=state["file_name"],
@@ -257,7 +261,7 @@ def render_results(result: InvoiceState, extraction_mode: str) -> None:
     """Display the extraction results and optional debug expandables."""
     st.subheader("Extracted Invoice JSON")
     st.json(result.get("extracted_fields", {}))
-
+    
     with st.expander("Raw model output"):
         st.code(result.get("raw_response", ""), language="json")
 
@@ -282,14 +286,15 @@ def main() -> None:
     extraction_mode_label = st.sidebar.radio("Extraction method", list(MODE_OPTIONS))
     extraction_mode = MODE_OPTIONS[extraction_mode_label]
     uploaded_file = st.sidebar.file_uploader("Upload invoice", type=SUPPORTED_UPLOAD_TYPES)
-
+    
+    # If no file is uploaded, skip the rest of the app
     if not uploaded_file:
         return
 
     file_bytes = uploaded_file.getvalue()
     st.write(f"File: `{uploaded_file.name}`")
     render_file_preview(uploaded_file.type, uploaded_file.name, file_bytes)
-
+    # Show a note about how PDFs are handled in multimodal mode since that may not be obvious to users
     if extraction_mode == MODE_MULTIMODAL and uploaded_file.type == "application/pdf":
         st.caption("Multimodal mode uses the first PDF page as image input.")
 
