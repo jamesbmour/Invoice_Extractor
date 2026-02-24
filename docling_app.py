@@ -107,17 +107,41 @@ def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes)
     return result.document.export_to_markdown().strip()
 
 
-def to_base64_image(file_type: str, file_bytes: bytes) -> tuple[str, str]:
-    """Encode file bytes as a base64 image string for the multimodal LLM."""
-    # Render PDFs to a PNG of the first page since vision models need images
+def to_base64_images(file_type: str, file_bytes: bytes) -> list[tuple[str, str]]:
+    """Encode file bytes as one or more base64 images for the multimodal LLM."""
+    # Render every PDF page to PNG so the model can read full multi-page documents
     if file_type == "application/pdf":
-        image = convert_from_bytes(file_bytes, first_page=1, last_page=1, dpi=200)[0]
-        buffer = BytesIO()
-        image.save(buffer, format="PNG")
-        # Return the MIME type and base64-encoded image data URI
-        return "image/png", base64.b64encode(buffer.getvalue()).decode("utf-8")
+        encoded_pages: list[tuple[str, str]] = []
+        for image in convert_from_bytes(file_bytes, dpi=200):
+            buffer = BytesIO()
+            image.save(buffer, format="PNG")
+            encoded_pages.append(("image/png", base64.b64encode(buffer.getvalue()).decode("utf-8")))
+        return encoded_pages
 
-    return file_type, base64.b64encode(file_bytes).decode("utf-8")
+    return [(file_type, base64.b64encode(file_bytes).decode("utf-8"))]
+
+
+def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str, Any]]:
+    """Build the multimodal message content using all pages for PDF inputs."""
+    images = to_base64_images(file_type, file_bytes)
+    prompt = "Extract all invoice information from this document image."
+    if file_type == "application/pdf":
+        prompt = (
+            f"Extract all invoice information from this {len(images)}-page PDF. "
+            "Use all pages before returning JSON."
+        )
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for page_number, (mime, image_b64) in enumerate(images, start=1):
+        if file_type == "application/pdf":
+            content.append({"type": "text", "text": f"PDF page {page_number}"})
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+            }
+        )
+    return content
 
 
 def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
@@ -177,23 +201,11 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
 
     # Branch based on extraction mode: image-based or text-based
     if state.get("extraction_mode") == MODE_MULTIMODAL:
-        mime, image_b64 = to_base64_image(state["file_type"], state["file_bytes"])
-        # Send the document as an inline base64 image to the vision model
+        # Send the document as one or more inline base64 images to the vision model
         response = llm.invoke(
             [
                 SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(
-                    content=[
-                        {
-                            "type": "text",
-                            "text": "Extract all invoice information from this document image.",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{image_b64}"},
-                        },
-                    ]
-                ),
+                HumanMessage(content=build_multimodal_content(state["file_type"], state["file_bytes"])),
             ]
         )
     else:
@@ -296,7 +308,7 @@ def main() -> None:
     render_file_preview(uploaded_file.type, uploaded_file.name, file_bytes)
     # Show a note about how PDFs are handled in multimodal mode since that may not be obvious to users
     if extraction_mode == MODE_MULTIMODAL and uploaded_file.type == "application/pdf":
-        st.caption("Multimodal mode uses the first PDF page as image input.")
+        st.caption("Multimodal mode uses every PDF page as image input.")
 
     # Trigger extraction and store results in session state for persistence
     if st.button("Extract Information", type="primary"):
