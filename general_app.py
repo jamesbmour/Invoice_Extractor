@@ -1,4 +1,3 @@
-# %%
 """General document extractor with Docling or multimodal-only LLM modes."""
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from pdf2image import convert_from_bytes
 
 load_dotenv()
 
-# %%
 ########################### App Configuration & Constants ###########################
 
 APP_TITLE = "General Document Extractor"
@@ -361,13 +359,14 @@ def render_results(result: ExtractionState) -> None:
 
 
 def render_extract_tab() -> None:
-    model_name = st.text_input("Ollama model", value=DEFAULT_MODEL_NAME)
-    mode_label = st.radio("Extraction method", list(MODE_OPTIONS), horizontal=True)
+    with st.sidebar:
+        st.subheader("Extraction Settings")
+        model_name = st.text_input("Ollama model", value=DEFAULT_MODEL_NAME)
+        mode_label = st.radio("Extraction method", list(MODE_OPTIONS))
+        uploaded_file = st.file_uploader(
+            "Upload invoice", type=SUPPORTED_UPLOAD_TYPES, key="upload_file"
+        )
     mode = MODE_OPTIONS[mode_label]
-
-    uploaded_file = st.file_uploader(
-        "Upload file", type=SUPPORTED_UPLOAD_TYPES, key="upload_file"
-    )
 
     # Exit early when no file has been uploaded yet to avoid downstream errors
     if not uploaded_file:
