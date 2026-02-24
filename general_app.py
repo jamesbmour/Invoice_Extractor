@@ -144,16 +144,39 @@ def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes)
         Path(tmp_path).unlink(missing_ok=True)  # Clean up temp file after conversion
 
 
-def to_base64_image(file_type: str, file_bytes: bytes) -> tuple[str, str]:
-    # Rasterize the first PDF page to PNG so a vision model can consume it
+def to_base64_images(file_type: str, file_bytes: bytes) -> list[tuple[str, str]]:
+    # Rasterize every PDF page to PNG so the vision model can consume the full document
     if file_type == "application/pdf":
-        image = convert_from_bytes(file_bytes, first_page=1, last_page=1, dpi=200)[
-            0
-        ]  # 200 dpi balances quality and token size
-        buf = BytesIO()
-        image.save(buf, format="PNG")
-        return "image/png", base64.b64encode(buf.getvalue()).decode("utf-8")
-    return file_type, base64.b64encode(file_bytes).decode("utf-8")
+        encoded_pages: list[tuple[str, str]] = []
+        for image in convert_from_bytes(file_bytes, dpi=200):  # 200 dpi balances quality and token size
+            buf = BytesIO()
+            image.save(buf, format="PNG")
+            encoded_pages.append(("image/png", base64.b64encode(buf.getvalue()).decode("utf-8")))
+        return encoded_pages
+    return [(file_type, base64.b64encode(file_bytes).decode("utf-8"))]
+
+
+def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str, Any]]:
+    # Build the multimodal payload from one image (image upload) or many images (multi-page PDF)
+    images = to_base64_images(file_type, file_bytes)
+    prompt = "Extract information from this document image."
+    if file_type == "application/pdf":
+        prompt = (
+            f"Extract information from this {len(images)}-page PDF document. "
+            "Use all pages before returning JSON."
+        )
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for page_number, (mime, image_b64) in enumerate(images, start=1):
+        if file_type == "application/pdf":
+            content.append({"type": "text", "text": f"PDF page {page_number}"})
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+            }
+        )
+    return content
 
 
 ########################### LLM Prompt Construction ###########################
@@ -236,20 +259,10 @@ def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name
 
     # Build a single-step multimodal flow or a two-step Docling+LLM flow
     if mode == MODE_MM:
-        mime, image_b64 = to_base64_image(file_type, file_bytes)
         raw_response, extracted_fields = extract_with_prompt(
             model_name,
             state["field_defs"],
-            [
-                {
-                    "type": "text",
-                    "text": "Extract information from this document image.",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{image_b64}"},
-                },
-            ],
+            build_multimodal_content(file_type, file_bytes),
         )
         return {
             "mode": MODE_MM,
@@ -321,10 +334,6 @@ def render_extract_tab() -> None:
     file_bytes = uploaded_file.getvalue()
     st.write(f"File: `{uploaded_file.name}`")
     render_file_preview(uploaded_file.type, uploaded_file.name, file_bytes)
-
-    # Warn the user that only the first page will be analysed in multimodal PDF mode
-    if mode == MODE_MM and uploaded_file.type == "application/pdf":
-        st.caption("Multimodal mode uses the first PDF page as an image input.")
 
     # Trigger extraction and persist the result so it survives reruns
     if st.button("Extract Information", type="primary"):
