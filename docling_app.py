@@ -7,7 +7,6 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any, TypedDict
-
 import streamlit as st
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,15 +14,23 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph
 
 try:
+    import langchain
+    if not hasattr(langchain, "debug"):
+        langchain.debug = False
+    if not hasattr(langchain, "verbose"):
+        langchain.verbose = False
+    if not hasattr(langchain, "llm_cache"):
+        langchain.llm_cache = None
+except Exception:
+    pass
+try:
     from docling.document_converter import DocumentConverter
 except Exception as exc:  # pragma: no cover - runtime dependency guard
     DocumentConverter = None
     DOCLING_IMPORT_ERROR = str(exc)
 else:
     DOCLING_IMPORT_ERROR = ""
-
 load_dotenv()
-
 APP_TITLE = "Invoice Extractor (Docling + Ollama + LangGraph)"
 DEFAULT_MODEL_NAME = "ministral-3:3b"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -48,8 +55,6 @@ Include these keys:
 - payment_terms
 - line_items (array of objects with: description, quantity, unit_price, amount)
 Use null when a field is missing."""
-
-
 class InvoiceState(TypedDict, total=False):
     file_name: str
     file_type: str
@@ -58,12 +63,8 @@ class InvoiceState(TypedDict, total=False):
     invoice_text: str
     raw_response: str
     extracted_fields: dict[str, Any]
-
-
 def is_pdf(file_type: str) -> bool:
     return file_type == "application/pdf"
-
-
 @st.cache_resource
 def get_docling_converter() -> Any:
     if DocumentConverter is None:
@@ -72,8 +73,6 @@ def get_docling_converter() -> Any:
             f"Import error: {DOCLING_IMPORT_ERROR}"
         )
     return DocumentConverter()
-
-
 def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes) -> str:
     suffixes = {
         "application/pdf": ".pdf",
@@ -92,8 +91,6 @@ def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes)
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-
-
 def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
     if isinstance(content, dict):
         return json.dumps(content), content
@@ -111,8 +108,6 @@ def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
         raw = str(content).strip()
     cleaned = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     return raw, json.loads(cleaned)
-
-
 def load_document_node(state: InvoiceState) -> InvoiceState:
     return {
         "invoice_text": extract_text_with_docling(
@@ -121,8 +116,6 @@ def load_document_node(state: InvoiceState) -> InvoiceState:
             file_bytes=state["file_bytes"],
         )
     }
-
-
 def extract_invoice_node(state: InvoiceState) -> InvoiceState:
     llm = ChatOllama(model=state["model_name"], temperature=0, format="json", base_url=OLLAMA_BASE_URL)
     prompt = f"Extract all invoice information from this document content.\n\n{state['invoice_text']}"
@@ -130,8 +123,6 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
         llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]).content
     )
     return {"raw_response": raw_response, "extracted_fields": extracted_fields}
-
-
 @st.cache_resource
 def build_invoice_graph():
     graph = StateGraph(InvoiceState)
@@ -141,14 +132,10 @@ def build_invoice_graph():
     graph.add_edge("load_document", "extract_invoice")
     graph.add_edge("extract_invoice", END)
     return graph.compile()
-
-
 def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name: str) -> InvoiceState:
     return build_invoice_graph().invoke(
         {"file_name": file_name, "file_type": file_type, "file_bytes": file_bytes, "model_name": model_name}
     )
-
-
 def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> None:
     if file_type.startswith("image/"):
         st.image(file_bytes, caption=file_name)
@@ -159,8 +146,6 @@ def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> No
             f'<embed src="data:application/pdf;base64,{pdf_b64}" width="100%" height="700" type="application/pdf">',
             unsafe_allow_html=True,
         )
-
-
 def render_results(result: InvoiceState) -> None:
     st.subheader("Extracted Invoice JSON")
     st.json(result.get("extracted_fields", {}))
@@ -168,8 +153,6 @@ def render_results(result: InvoiceState) -> None:
         st.code(result.get("raw_response", ""), language="json")
     with st.expander("Docling extracted text"):
         st.text(result.get("invoice_text", ""))
-
-
 def main() -> None:
     st.set_page_config(page_title="Invoice Extractor", page_icon=":receipt:")
     st.title(APP_TITLE)
