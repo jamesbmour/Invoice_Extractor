@@ -8,19 +8,16 @@ import re
 import tempfile
 from io import BytesIO
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 import streamlit as st
 from docling.document_converter import DocumentConverter
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from langgraph.graph import END, StateGraph
 from pdf2image import convert_from_bytes
 
 load_dotenv()
-
 ########################### App Configuration & Constants ###########################
-
 APP_TITLE = "General Document Extractor"
 DEFAULT_MODEL_NAME = "ministral-3:3b"
 OLLAMA_BASE_URL = os.getenv(
@@ -30,12 +27,17 @@ SUPPORTED_UPLOAD_TYPES = ["pdf", "png", "jpg", "jpeg", "webp"]
 SCHEMA_PATH = Path(__file__).with_name(
     "field_schema.json"
 )  # Schema file lives alongside this script
-
 # Define string constants for extraction mode identifiers
 MODE_DOCLING = "docling"
 MODE_MM = "multimodal"
 MODE_OPTIONS = {"Docling + Text LLM": MODE_DOCLING, "Multimodal LLM only": MODE_MM}
-
+MIME_SUFFIXES = {
+    "application/pdf": ".pdf",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+}
 # Provide sensible invoice-focused defaults when no schema file exists
 DEFAULT_FIELDS = [
     {
@@ -70,26 +72,12 @@ DEFAULT_FIELDS = [
         "description": "Array of objects with description, quantity, unit_price, and amount.",
     },
 ]
-
 ########################### State & Type Definitions ###########################
-
-
-# Define the LangGraph state schema; all keys are optional to allow partial updates between nodes
-class ExtractionState(TypedDict, total=False):
-    file_name: str
-    file_type: str
-    file_bytes: bytes
-    model_name: str
-    field_defs: list[dict[str, str]]
-    mode: str
-    document_text: str  # Populated by Docling in text-based mode
-    raw_response: str  # Raw LLM output before JSON parsing
-    extracted_fields: dict[str, Any]
+# Define a dict-based extraction state; keys remain optional as each step adds fields incrementally.
+ExtractionState = dict[str, Any]
 
 
 ########################### Field Normalization Utilities ###########################
-
-
 def normalize_name(name: str) -> str:
     # Strip non-alphanumeric characters and collapse repeated underscores for consistent key formatting
     return re.sub(
@@ -100,28 +88,31 @@ def normalize_name(name: str) -> str:
 def normalize_fields(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
     # Use an ordered dict pattern to deduplicate fields while preserving the last-seen definition
     deduped: dict[str, str] = {}
-    order: list[str] = []
     for row in rows:
         key = normalize_name(row.get("name", ""))
         if not key:
             continue
-        # Move duplicate keys to the end so the latest entry wins
-        if key in deduped:
-            order.remove(key)
-        order.append(key)
+        deduped.pop(
+            key, None
+        )  # Move duplicate keys to the end so the latest entry wins
         deduped[key] = str(row.get("description", "")).strip()
-    return [{"name": key, "description": deduped[key]} for key in order]
+    return [
+        {"name": key, "description": description}
+        for key, description in deduped.items()
+    ]
 
 
 ########################### Schema Persistence ###########################
-
-
 def load_fields() -> list[dict[str, str]]:
-    # Prefer the saved schema file; fall back to defaults if file is missing or empty
-    if SCHEMA_PATH.exists():
+    # Prefer the saved schema file; fall back to defaults if file is missing, invalid, or empty
+    defaults = normalize_fields(DEFAULT_FIELDS)
+    if not SCHEMA_PATH.exists():
+        return defaults
+    try:
         loaded = normalize_fields(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
-        return loaded or normalize_fields(DEFAULT_FIELDS)
-    return normalize_fields(DEFAULT_FIELDS)
+    except (json.JSONDecodeError, OSError):
+        return defaults
+    return loaded or defaults
 
 
 def save_fields(fields: list[dict[str, Any]]) -> None:
@@ -132,8 +123,6 @@ def save_fields(fields: list[dict[str, Any]]) -> None:
 
 
 ########################### Document Processing ###########################
-
-
 # Cache the converter across Streamlit reruns to avoid expensive re-initialization
 @st.cache_resource
 def get_docling_converter() -> Any:
@@ -142,25 +131,18 @@ def get_docling_converter() -> Any:
 
 def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes) -> str:
     # Map MIME types to file extensions so Docling can infer the correct parser
-    suffixes = {
-        "application/pdf": ".pdf",
-        "image/png": ".png",
-        "image/jpeg": ".jpg",
-        "image/jpg": ".jpg",
-        "image/webp": ".webp",
-    }
-    suffix = suffixes.get(
+    suffix = MIME_SUFFIXES.get(
         file_type, Path(file_name).suffix or ".bin"
     )  # Fall back to original extension
-
     # Write bytes to a temp file because Docling requires a file-system path
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
-
-    result = get_docling_converter().convert(tmp_path)
-    Path(tmp_path).unlink(missing_ok=True)  # Clean up temp file after conversion
-    return result.document.export_to_markdown().strip()
+    try:
+        result = get_docling_converter().convert(tmp_path)
+        return result.document.export_to_markdown().strip()
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)  # Clean up temp file after conversion
 
 
 def to_base64_image(file_type: str, file_bytes: bytes) -> tuple[str, str]:
@@ -176,8 +158,6 @@ def to_base64_image(file_type: str, file_bytes: bytes) -> tuple[str, str]:
 
 
 ########################### LLM Prompt Construction ###########################
-
-
 def build_system_prompt(field_defs: list[dict[str, str]]) -> str:
     # Instruct the model to return strict JSON with only the requested fields
     lines = [
@@ -195,27 +175,23 @@ def build_system_prompt(field_defs: list[dict[str, str]]) -> str:
 
 
 ########################### Response Parsing ###########################
-
-
 def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
     # Handle dict responses directly without re-serializing
     if isinstance(content, dict):
         return json.dumps(content), content
-
     # Concatenate multi-part message content into a single string
     if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
-            else:
-                parts.append(str(item))
+        parts = [
+            item
+            if isinstance(item, str)
+            else item.get("text", "")
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+            else str(item)
+            for item in content
+        ]
         raw = "\n".join(parts).strip()
     else:
         raw = str(content).strip()
-
     # Strip markdown code fences that some models wrap around JSON output
     cleaned = (
         raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -223,113 +199,81 @@ def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
     return raw, json.loads(cleaned)
 
 
-########################### LangGraph Node Definitions ###########################
-
-
-def load_document_node(state: ExtractionState) -> ExtractionState:
-    # Convert the uploaded file to markdown text for the downstream text-based LLM node
-    return {
-        "document_text": extract_text_with_docling(
-            state["file_name"], state["file_type"], state["file_bytes"]
-        )
-    }
-
-
-def extract_docling_node(state: ExtractionState) -> ExtractionState:
+########################### Extraction Workflow ###########################
+def make_llm(model_name: str) -> ChatOllama:
     # Use temperature=0 for deterministic, structured JSON extraction
-    llm = ChatOllama(
-        model=state["model_name"],
-        temperature=0,
-        format="json",
-        base_url=OLLAMA_BASE_URL,
+    return ChatOllama(
+        model=model_name, temperature=0, format="json", base_url=OLLAMA_BASE_URL
     )
-    prompt = (
-        f"Extract information from this document content.\n\n{state['document_text']}"
-    )
-    response = llm.invoke(
+
+
+def extract_with_prompt(
+    model_name: str,
+    field_defs: list[dict[str, str]],
+    human_content: str | list[dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    response = make_llm(model_name).invoke(
         [
-            SystemMessage(content=build_system_prompt(state["field_defs"])),
-            HumanMessage(content=prompt),
+            SystemMessage(content=build_system_prompt(field_defs)),
+            HumanMessage(content=human_content),
         ]
     )
-    raw_response, extracted_fields = parse_json_content(response.content)
-    return {"raw_response": raw_response, "extracted_fields": extracted_fields}
-
-
-def extract_multimodal_node(state: ExtractionState) -> ExtractionState:
-    # Use temperature=0 for deterministic, structured JSON extraction
-    llm = ChatOllama(
-        model=state["model_name"],
-        temperature=0,
-        format="json",
-        base_url=OLLAMA_BASE_URL,
-    )
-    mime, image_b64 = to_base64_image(state["file_type"], state["file_bytes"])
-
-    # Send the image as a data URL alongside the text instruction
-    response = llm.invoke(
-        [
-            SystemMessage(content=build_system_prompt(state["field_defs"])),
-            HumanMessage(
-                content=[
-                    {
-                        "type": "text",
-                        "text": "Extract information from this document image.",
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{image_b64}"},
-                    },
-                ]
-            ),
-        ]
-    )
-    raw_response, extracted_fields = parse_json_content(response.content)
-    # Return empty document_text since no Docling step was performed
-    return {
-        "raw_response": raw_response,
-        "extracted_fields": extracted_fields,
-        "document_text": "",
-    }
-
-
-########################### Extraction Workflow (LangGraph) ###########################
+    return parse_json_content(response.content)
 
 
 def run_extraction(
     file_name: str, file_type: str, file_bytes: bytes, model_name: str, mode: str
 ) -> ExtractionState:
-    graph = StateGraph(ExtractionState)
-
-    # Build a single-node graph for multimodal mode or a two-node pipeline for Docling mode
+    state: ExtractionState = {
+        "file_name": file_name,
+        "file_type": file_type,
+        "file_bytes": file_bytes,
+        "model_name": model_name,
+        "field_defs": st.session_state[
+            "field_defs"
+        ],  # Pull live field definitions from session state
+        "mode": mode,
+    }
+    # Build a single-step multimodal flow or a two-step Docling+LLM flow
     if mode == MODE_MM:
-        graph.add_node("extract_multimodal", extract_multimodal_node)
-        graph.set_entry_point("extract_multimodal")
-        graph.add_edge("extract_multimodal", END)
-    else:
-        graph.add_node("load_document", load_document_node)
-        graph.add_node("extract_docling", extract_docling_node)
-        graph.set_entry_point("load_document")
-        graph.add_edge("load_document", "extract_docling")
-        graph.add_edge("extract_docling", END)
-
-    return graph.compile().invoke(
-        {
-            "file_name": file_name,
-            "file_type": file_type,
-            "file_bytes": file_bytes,
-            "model_name": model_name,
-            "field_defs": st.session_state[
-                "field_defs"
-            ],  # Pull live field definitions from session state
-            "mode": mode,
+        mime, image_b64 = to_base64_image(file_type, file_bytes)
+        raw_response, extracted_fields = extract_with_prompt(
+            model_name,
+            state["field_defs"],
+            [
+                {
+                    "type": "text",
+                    "text": "Extract information from this document image.",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+                },
+            ],
+        )
+        return {
+            "mode": MODE_MM,
+            "raw_response": raw_response,
+            "extracted_fields": extracted_fields,
+            "document_text": "",  # Return empty document_text since no Docling step was performed
         }
+    document_text = extract_text_with_docling(
+        file_name, file_type, file_bytes
+    )  # Convert to markdown for text-only extraction
+    raw_response, extracted_fields = extract_with_prompt(
+        model_name,
+        state["field_defs"],
+        f"Extract information from this document content.\n\n{document_text}",
     )
+    return {
+        "mode": MODE_DOCLING,
+        "document_text": document_text,
+        "raw_response": raw_response,
+        "extracted_fields": extracted_fields,
+    }
 
 
 ########################### UI Rendering Helpers ###########################
-
-
 def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> None:
     # Display raster images natively; embed PDFs using an HTML object tag
     if file_type.startswith("image/"):
@@ -345,10 +289,8 @@ def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> No
 def render_results(result: ExtractionState) -> None:
     st.subheader("Extracted JSON")
     st.json(result.get("extracted_fields", {}))
-
     with st.expander("Raw model output"):
         st.code(result.get("raw_response", ""), language="json")
-
     # Only show the Docling text expander when text-based extraction was used
     if result.get("mode") == MODE_DOCLING:
         with st.expander("Docling extracted text"):
@@ -356,8 +298,6 @@ def render_results(result: ExtractionState) -> None:
 
 
 ########################### Streamlit Tab Renderers ###########################
-
-
 def render_extract_tab() -> None:
     with st.sidebar:
         st.subheader("Extraction Settings")
@@ -367,37 +307,30 @@ def render_extract_tab() -> None:
             "Upload invoice", type=SUPPORTED_UPLOAD_TYPES, key="upload_file"
         )
     mode = MODE_OPTIONS[mode_label]
-
     # Exit early when no file has been uploaded yet to avoid downstream errors
     if not uploaded_file:
         return
-
     file_bytes = uploaded_file.getvalue()
     st.write(f"File: `{uploaded_file.name}`")
     render_file_preview(uploaded_file.type, uploaded_file.name, file_bytes)
-
     # Warn the user that only the first page will be analysed in multimodal PDF mode
     if mode == MODE_MM and uploaded_file.type == "application/pdf":
         st.caption("Multimodal mode uses the first PDF page as an image input.")
-
     # Trigger extraction and persist the result so it survives reruns
     if st.button("Extract Information", type="primary"):
         with st.spinner("Running extraction workflow..."):
             st.session_state["extraction_result"] = run_extraction(
                 uploaded_file.name, uploaded_file.type, file_bytes, model_name, mode
             )
-
     if st.session_state.get("extraction_result") is not None:
         render_results(st.session_state["extraction_result"])
 
 
 def render_fields_tab() -> None:
     st.write("Add or remove field names and descriptions used for extraction.")
-
     edited = st.data_editor(
         st.session_state["field_defs"], num_rows="dynamic", width="stretch"
     )
-
     # Handle both pandas DataFrames and plain list-of-dicts returned by the editor
     rows = (
         edited.to_dict("records")
@@ -405,17 +338,13 @@ def render_fields_tab() -> None:
         else [dict(row) for row in edited]
     )
     normalized = normalize_fields(rows)
-
     # Show the user exactly which keys will be sent to the LLM after normalization
     st.caption("Active normalized keys")
     st.code(", ".join(field["name"] for field in normalized) or "(none)")
-
     left, right = st.columns(2)
-
     if left.button("Save Fields", type="primary"):
         st.session_state["field_defs"] = normalized
         save_fields(normalized)
-
     # Reset session state and persisted schema back to the built-in invoice defaults
     if right.button("Reset to Invoice Defaults"):
         defaults = normalize_fields(DEFAULT_FIELDS)
@@ -425,19 +354,12 @@ def render_fields_tab() -> None:
 
 
 ########################### App Entry Point ###########################
-
-
 def main() -> None:
     st.set_page_config(page_title="General Extractor", page_icon=":clipboard:")
-
     # Initialize session state keys on first run to prevent KeyErrors during rendering
-    if "field_defs" not in st.session_state:
-        st.session_state["field_defs"] = load_fields()
-    if "extraction_result" not in st.session_state:
-        st.session_state["extraction_result"] = None
-
+    st.session_state.setdefault("field_defs", load_fields())
+    st.session_state.setdefault("extraction_result", None)
     st.title(APP_TITLE)
-
     extract_tab, fields_tab = st.tabs(["Extract", "Fields"])
     with extract_tab:
         render_extract_tab()
