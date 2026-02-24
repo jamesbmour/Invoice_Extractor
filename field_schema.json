@@ -1,0 +1,70 @@
+[
+  {
+    "name": "vendor_name",
+    "description": "Legal or display name of the vendor/seller."
+  },
+  {
+    "name": "vendor_address",
+    "description": "Full mailing address for the vendor."
+  },
+  {
+    "name": "vendor_email",
+    "description": "Vendor billing or contact email address."
+  },
+  {
+    "name": "vendor_phone",
+    "description": "Vendor contact phone number."
+  },
+  {
+    "name": "invoice_number",
+    "description": "Unique invoice identifier."
+  },
+  {
+    "name": "invoice_date",
+    "description": "Date when the invoice was issued."
+  },
+  {
+    "name": "due_date",
+    "description": "Payment due date listed on the invoice."
+  },
+  {
+    "name": "currency",
+    "description": "Invoice currency code or symbol (USD, EUR, $, etc.)."
+  },
+  {
+    "name": "subtotal",
+    "description": "Amount before tax and fees."
+  },
+  {
+    "name": "tax",
+    "description": "Total tax amount charged."
+  },
+  {
+    "name": "total",
+    "description": "Final total amount due."
+  },
+  {
+    "name": "purchase_order_number",
+    "description": "Associated PO number if present."
+  },
+  {
+    "name": "bill_to",
+    "description": "Billing recipient name and/or address block."
+  },
+  {
+    "name": "ship_to",
+    "description": "Shipping recipient name and/or address block."
+  },
+  {
+    "name": "payment_terms",
+    "description": "Payment terms such as Net 30 or due on receipt."
+  },
+  {
+    "name": "line_items",
+    "description": "Array of objects with description, quantity, unit_price, and amount."
+  },
+  {
+    "name": "payment_date",
+    "description": "Number of days until the payment is due"
+  }
+]
