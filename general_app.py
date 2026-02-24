@@ -231,7 +231,7 @@ def render_fields_tab() -> None:
     st.write("Add or remove field names and descriptions used for extraction.")
 
     # Allow live editing of the field schema via an interactive table
-    edited = st.data_editor(st.session_state["field_defs"], num_rows="dynamic", use_container_width=True)
+    edited = st.data_editor(st.session_state["field_defs"], num_rows="dynamic", width="stretch")
 
     # Normalize editor output regardless of whether it returns a DataFrame or raw dicts
     rows = edited.to_dict("records") if hasattr(edited, "to_dict") else [dict(row) for row in edited]

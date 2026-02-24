@@ -350,7 +350,7 @@ def main() -> None:
 
     st.markdown("---")
 
-    if st.button("Extract Invoice Data", type="primary", use_container_width=True):
+    if st.button("Extract Invoice Data", type="primary", width="stretch"):
         with st.status("Processing invoice...", expanded=True) as status:
             st.session_state["result"] = process_invoice(
                 file_bytes=file_bytes,
