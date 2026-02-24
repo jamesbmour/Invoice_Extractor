@@ -9,6 +9,7 @@ import tempfile
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+import pandas as pd
 import streamlit as st
 from docling.document_converter import DocumentConverter
 from dotenv import load_dotenv
@@ -265,6 +266,7 @@ def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name
             build_multimodal_content(file_type, file_bytes),
         )
         return {
+            "file_name": file_name,
             "mode": MODE_MM,
             "raw_response": raw_response,
             "extracted_fields": extracted_fields,
@@ -280,6 +282,7 @@ def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name
         f"Extract information from this document content.\n\n{document_text}",
     )
     return {
+        "file_name": file_name,
         "mode": MODE_DOCLING,
         "document_text": document_text,
         "raw_response": raw_response,
@@ -304,7 +307,27 @@ def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> No
 
 def render_results(result: ExtractionState) -> None:
     st.subheader("Extracted JSON")
-    st.json(result.get("extracted_fields", {}))
+    extracted_fields = result.get("extracted_fields", {})
+    st.json(extracted_fields)
+
+    # Convert extracted fields into a one-row CSV; serialize nested structures as JSON strings.
+    normalized_for_csv = (
+        {
+            key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
+            for key, value in extracted_fields.items()
+        }
+        if isinstance(extracted_fields, dict)
+        else {"extracted_data": json.dumps(extracted_fields, ensure_ascii=False)}
+    )
+    csv_bytes = pd.DataFrame([normalized_for_csv]).to_csv(index=False).encode("utf-8")
+    file_stem = Path(str(result.get("file_name", "extracted_data"))).stem
+    st.download_button(
+        label="Download CSV",
+        data=csv_bytes,
+        file_name=f"{file_stem}_extracted.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
     with st.expander("Raw model output"):
         st.code(result.get("raw_response", ""), language="json")

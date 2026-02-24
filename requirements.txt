@@ -5,3 +5,4 @@ langchain-core
 langchain-ollama
 pdf2image
 Pillow
+pandas
