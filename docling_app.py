@@ -218,12 +218,11 @@ def main() -> None:
     st.set_page_config(page_title="Invoice Extractor", page_icon=":receipt:")
     st.title(APP_TITLE)
     st.write("Upload an invoice PDF or image and extract structured fields.")
-    model_name = st.text_input("Ollama model", value=DEFAULT_MODEL_NAME)
-    extraction_mode_label = st.radio(
-        "Extraction method", list(MODE_OPTIONS), horizontal=True
-    )
+    st.sidebar.header("Settings")
+    model_name = st.sidebar.text_input("Ollama model", value=DEFAULT_MODEL_NAME)
+    extraction_mode_label = st.sidebar.radio("Extraction method", list(MODE_OPTIONS))
     extraction_mode = MODE_OPTIONS[extraction_mode_label]
-    uploaded_file = st.file_uploader("Upload invoice", type=SUPPORTED_UPLOAD_TYPES)
+    uploaded_file = st.sidebar.file_uploader("Upload invoice", type=SUPPORTED_UPLOAD_TYPES)
     if not uploaded_file:
         return
     file_bytes = uploaded_file.getvalue()
