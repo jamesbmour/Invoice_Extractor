@@ -63,10 +63,6 @@ class InvoiceState(TypedDict, total=False):
     extracted_fields: dict[str, Any]
 
 
-def is_pdf(file_type: str) -> bool:
-    return file_type == "application/pdf"
-
-
 @st.cache_resource
 def get_docling_converter() -> Any:
     return DocumentConverter()
@@ -91,7 +87,7 @@ def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes)
 
 
 def to_base64_image(file_type: str, file_bytes: bytes) -> tuple[str, str]:
-    if is_pdf(file_type):
+    if file_type == "application/pdf":
         image = convert_from_bytes(file_bytes, first_page=1, last_page=1, dpi=200)[0]
         buffer = BytesIO()
         image.save(buffer, format="PNG")
@@ -200,7 +196,7 @@ def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> No
     if file_type.startswith("image/"):
         st.image(file_bytes, caption=file_name)
         return
-    if is_pdf(file_type):
+    if file_type == "application/pdf":
         pdf_b64 = base64.b64encode(file_bytes).decode("utf-8")
         st.markdown(
             f'<embed src="data:application/pdf;base64,{pdf_b64}" width="100%" height="700" type="application/pdf">',
@@ -233,7 +229,7 @@ def main() -> None:
     file_bytes = uploaded_file.getvalue()
     st.write(f"File: `{uploaded_file.name}`")
     render_file_preview(uploaded_file.type, uploaded_file.name, file_bytes)
-    if extraction_mode == MODE_MULTIMODAL and is_pdf(uploaded_file.type):
+    if extraction_mode == MODE_MULTIMODAL and uploaded_file.type == "application/pdf":
         st.caption("Multimodal mode uses the first PDF page as image input.")
     if st.button("Extract Information", type="primary"):
         with st.spinner("Running extraction workflow..."):
