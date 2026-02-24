@@ -1,7 +1,7 @@
 [
   {
     "name": "vendor_name",
-    "description": "Legal or display name of the vendor/seller."
+    "description": "Legal or display name of the vendor/seller. The name of the company that the invoice is from."
   },
   {
     "name": "vendor_address",
