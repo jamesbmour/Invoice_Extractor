@@ -32,4 +32,5 @@ EXPOSE ${PORT}
 HEALTHCHECK CMD curl --fail http://localhost:${PORT}/_stcore/health
 
 # Run the Streamlit application with the new entry point
-ENTRYPOINT ["streamlit", "run", "general_app.py", "--server.port=${PORT}", "--server.address=0.0.0.0"]
+# Or use this shell form:
+ENTRYPOINT streamlit run general_app.py --server.port=${PORT} --server.address=0.0.0.0
