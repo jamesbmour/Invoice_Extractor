@@ -139,6 +139,7 @@ def render_results(result: InvoiceState, extraction_mode: str) -> None:
 
 ############################# Main App #####################################
 
+
 def main() -> None:
     """Entry point: configure the Streamlit page and orchestrate the UI."""
     st.set_page_config(page_title="Invoice Extractor", page_icon=":receipt:")
@@ -174,6 +175,7 @@ def main() -> None:
     # Re-render results if they already exist in session state
     if st.session_state.get("extraction_result") is not None:
         render_results(st.session_state["extraction_result"], extraction_mode)
+
 
 if __name__ == "__main__":
     main()
