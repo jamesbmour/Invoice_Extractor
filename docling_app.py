@@ -1,7 +1,4 @@
 """Invoice Extractor app using Docling + LangChain + Ollama + LangGraph."""
-
-from __future__ import annotations
-
 import base64
 import json
 import os
@@ -18,7 +15,7 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import END, StateGraph
 from pdf2image import convert_from_bytes
 
-############################# Configuration ################################
+ ###################### Configuration ####################### 
 
 # Load environment variables from .env file
 load_dotenv()
@@ -67,13 +64,13 @@ class InvoiceState(TypedDict, total=False):
     file_type: str
     file_bytes: bytes
     model_name: str
-    extraction_mode: str
+    extraction_mode: str # either "docling" or "multimodal" 
     invoice_text: str
     raw_response: str
     extracted_fields: dict[str, Any]
 
 
-########################## Helper Functions ################################
+###################### Helper Functions ########################
 
 
 @st.cache_resource
@@ -97,7 +94,7 @@ def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
     """Parse the LLM response content into a raw string and a JSON dict."""
 
 
-########################### LangGraph Nodes ################################
+##################### LangGraph Nodes #########################
 
 
 def load_document_node(state: InvoiceState) -> InvoiceState:
@@ -108,7 +105,7 @@ def extract_invoice_node(state: InvoiceState) -> InvoiceState:
     """Send the document to the LLM and parse structured invoice fields."""
 
 
-######################### Graph Construction ###############################
+###################### Graph Construction #########################
 
 
 @st.cache_resource
@@ -126,7 +123,7 @@ def run_extraction(
     """Execute the full extraction graph with the provided inputs."""
 
 
-########################### UI Rendering ###################################
+##################### UI Rendering ##########################
 
 
 def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> None:
@@ -137,7 +134,7 @@ def render_results(result: InvoiceState, extraction_mode: str) -> None:
     """Display the extraction results and optional debug expandables."""
 
 
-############################# Main App #####################################
+####################### Main App #######################
 
 
 def main() -> None:
