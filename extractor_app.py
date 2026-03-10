@@ -32,6 +32,7 @@ MODE_DOCLING = "docling"
 MODE_MM = "multimodal"
 MODE_OPTIONS = {"Docling + Text LLM": MODE_DOCLING, "Multimodal LLM only": MODE_MM}
 
+# Map MIME types to file extensions for temp file creation
 MIME_SUFFIXES = {
     "application/pdf": ".pdf",
     "image/png": ".png",
@@ -85,11 +86,13 @@ ExtractionState = dict[str, Any]
 
 
 def normalize_name(name: str) -> str:
+    """Convert an arbitrary string into a clean, lowercase snake_case key."""
     # Strip non-alphanumeric characters and collapse repeated underscores for consistent key formatting
     return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower())).strip("_")
 
 
 def normalize_fields(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Deduplicate and clean a list of field definitions, keeping the last occurrence of each key."""
     # Use an ordered dict pattern to deduplicate fields while preserving the last-seen definition
     deduped: dict[str, str] = {}
     for row in rows:
@@ -105,6 +108,7 @@ def normalize_fields(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 def load_fields() -> list[dict[str, str]]:
+    """Load field definitions from the JSON schema file, falling back to built-in defaults."""
     # Prefer the saved schema file; fall back to defaults if file is missing, invalid, or empty
     defaults = normalize_fields(DEFAULT_FIELDS)
     if not SCHEMA_PATH.exists():
@@ -117,6 +121,7 @@ def load_fields() -> list[dict[str, str]]:
 
 
 def save_fields(fields: list[dict[str, Any]]) -> None:
+    """Persist normalized field definitions to the JSON schema file."""
     # Normalize before saving to ensure the file always contains clean, consistent keys
     SCHEMA_PATH.write_text(json.dumps(normalize_fields(fields), indent=2), encoding="utf-8")
 
@@ -127,10 +132,12 @@ def save_fields(fields: list[dict[str, Any]]) -> None:
 # Cache the converter across Streamlit reruns to avoid expensive re-initialization
 @st.cache_resource
 def get_docling_converter() -> Any:
+    """Return a singleton Docling DocumentConverter instance."""
     return DocumentConverter()
 
 
 def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes) -> str:
+    """Convert a document to markdown text using the Docling library."""
     # Map MIME types to file extensions so Docling can infer the correct parser
     suffix = MIME_SUFFIXES.get(file_type, Path(file_name).suffix or ".bin")  # Fall back to original extension
 
@@ -146,6 +153,7 @@ def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes)
 
 
 def to_base64_images(file_type: str, file_bytes: bytes) -> list[tuple[str, str]]:
+    """Convert a file into a list of (MIME type, base64 string) tuples, one per page/image."""
     # Rasterize every PDF page to PNG so the vision model can consume the full document
     if file_type == "application/pdf":
         encoded_pages: list[tuple[str, str]] = []
@@ -158,6 +166,7 @@ def to_base64_images(file_type: str, file_bytes: bytes) -> list[tuple[str, str]]
 
 
 def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str, Any]]:
+    """Construct a multimodal message payload with text prompt and inline base64 images."""
     # Build the multimodal payload from one image (image upload) or many images (multi-page PDF)
     images = to_base64_images(file_type, file_bytes)
     prompt = "Extract information from this document image."
@@ -168,6 +177,7 @@ def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str
         )
 
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    # Append each page image with an optional page label for multi-page PDFs
     for page_number, (mime, image_b64) in enumerate(images, start=1):
         if file_type == "application/pdf":
             content.append({"type": "text", "text": f"PDF page {page_number}"})
@@ -184,6 +194,7 @@ def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str
 
 
 def build_system_prompt(field_defs: list[dict[str, str]]) -> str:
+    """Generate a system prompt that instructs the LLM to extract specific fields as JSON."""
     # Instruct the model to return strict JSON with only the requested fields
     lines = [
         "You extract structured data from documents.",
@@ -201,6 +212,7 @@ def build_system_prompt(field_defs: list[dict[str, str]]) -> str:
 
 
 def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
+    """Parse LLM output into a (raw_string, parsed_dict) tuple, handling various response formats."""
     # Handle dict responses directly without re-serializing
     if isinstance(content, dict):
         return json.dumps(content), content
@@ -228,6 +240,7 @@ def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
 
 
 def make_llm(model_name: str) -> ChatOllama:
+    """Create an Ollama chat client configured for deterministic JSON output."""
     # Use temperature=0 for deterministic, structured JSON extraction
     return ChatOllama(model=model_name, temperature=0, format="json", base_url=OLLAMA_BASE_URL)
 
@@ -237,6 +250,7 @@ def extract_with_prompt(
     field_defs: list[dict[str, str]],
     human_content: str | list[dict[str, Any]],
 ) -> tuple[str, dict[str, Any]]:
+    """Send field definitions and document content to the LLM, returning parsed JSON."""
     # Send the system prompt and human message to the LLM and parse the structured response
     response = make_llm(model_name).invoke(
         [
@@ -248,6 +262,7 @@ def extract_with_prompt(
 
 
 def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name: str, mode: str) -> ExtractionState:
+    """Orchestrate the full extraction pipeline based on the selected mode."""
     # Bundle all inputs into a shared state dict for downstream steps to reference
     state: ExtractionState = {
         "file_name": file_name,
@@ -294,6 +309,7 @@ def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name
 
 
 def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> None:
+    """Display an uploaded file preview — native image or embedded PDF viewer."""
     # Display raster images natively; embed PDFs using an HTML object tag
     if file_type.startswith("image/"):
         st.image(file_bytes, caption=file_name)
@@ -306,11 +322,12 @@ def render_file_preview(file_type: str, file_name: str, file_bytes: bytes) -> No
 
 
 def render_results(result: ExtractionState) -> None:
+    """Display extraction results with JSON preview, CSV download, and debug expanders."""
     st.subheader("Extracted JSON")
     extracted_fields = result.get("extracted_fields", {})
     st.json(extracted_fields)
 
-    # Convert extracted fields into a one-row CSV; serialize nested structures as JSON strings.
+    # Convert extracted fields into a one-row CSV; serialize nested structures as JSON strings
     normalized_for_csv = (
         {
             key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
@@ -342,6 +359,7 @@ def render_results(result: ExtractionState) -> None:
 
 
 def render_extract_tab() -> None:
+    """Render the main extraction tab with sidebar controls and result display."""
     with st.sidebar:
         st.subheader("Extraction Settings")
         model_name = st.text_input("Ollama model", value=DEFAULT_MODEL_NAME)
@@ -370,6 +388,7 @@ def render_extract_tab() -> None:
 
 
 def render_fields_tab() -> None:
+    """Render the field schema editor tab for customizing extraction fields."""
     st.write("Add or remove field names and descriptions used for extraction.")
     edited = st.data_editor(st.session_state["field_defs"], num_rows="dynamic", width="stretch")
 
@@ -398,6 +417,7 @@ def render_fields_tab() -> None:
 
 
 def main() -> None:
+    """Initialize the Streamlit app and render the tabbed interface."""
     st.set_page_config(page_title="General Extractor", page_icon=":clipboard:")
 
     # Initialize session state keys on first run to prevent KeyErrors during rendering
