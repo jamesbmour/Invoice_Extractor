@@ -1,6 +1,4 @@
 """General document extractor with Docling or multimodal-only LLM modes."""
-
-from __future__ import annotations
 import base64
 import json
 import os
@@ -16,13 +14,15 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from pdf2image import convert_from_bytes
-
+from rich import print
 load_dotenv()
 
 ########################### App Configuration & Constants ###########################
 
-APP_TITLE = "General Document Extractor"
-DEFAULT_MODEL_NAME = "ministral-3:3b"
+APP_TITLE = "Document Extractor"
+# qwen3.5:2b, qwen3.5:4b, qwen3.5:9b, ministral-3:3b, qwen3.5:0.8b
+DEFAULT_MODEL_LIST = ['ministral-3:3b','qwen3.5:0.8b', 'qwen3.5:2b', 'qwen3.5:4b', 'qwen3.5:9b']
+DEFAULT_MODEL_NAME = "qwen3.5:2b"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")  # Fall back to local Ollama instance
 SUPPORTED_UPLOAD_TYPES = ["pdf", "png", "jpg", "jpeg", "webp"]
 SCHEMA_PATH = Path(__file__).with_name("field_schema.json")  # Schema file lives alongside this script
