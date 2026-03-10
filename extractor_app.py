@@ -95,12 +95,15 @@ def normalize_fields(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Deduplicate and clean a list of field definitions, keeping the last occurrence of each key."""
     # Use an ordered dict pattern to deduplicate fields while preserving the last-seen definition
     deduped: dict[str, str] = {}
+    # Iterate through rows and normalize keys; later entries overwrite earlier ones
     for row in rows:
         key = normalize_name(row.get("name", ""))
         if not key:
             continue
         deduped.pop(key, None)  # Move duplicate keys to the end so the latest entry wins
+        # Strip description to ensure consistent formatting
         deduped[key] = str(row.get("description", "")).strip()
+    # Return a list of normalized field dicts
     return [{"name": key, "description": description} for key, description in deduped.items()]
 
 
@@ -111,12 +114,15 @@ def load_fields() -> list[dict[str, str]]:
     """Load field definitions from the JSON schema file, falling back to built-in defaults."""
     # Prefer the saved schema file; fall back to defaults if file is missing, invalid, or empty
     defaults = normalize_fields(DEFAULT_FIELDS)
+    # Return defaults if the schema file does not exist
     if not SCHEMA_PATH.exists():
         return defaults
     try:
+        # Load and normalize the persisted schema file
         loaded = normalize_fields(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, OSError):
         return defaults
+    # Return loaded schema if it contains at least one valid field; otherwise return defaults
     return loaded or defaults
 
 
@@ -132,7 +138,7 @@ def save_fields(fields: list[dict[str, Any]]) -> None:
 # Cache the converter across Streamlit reruns to avoid expensive re-initialization
 @st.cache_resource
 def get_docling_converter() -> Any:
-    """Return a singleton Docling DocumentConverter instance."""
+    """Return a singleton Docling DocumentConverter instance. cache_resource ensures single instance per session."""
     return DocumentConverter()
 
 
@@ -146,9 +152,11 @@ def extract_text_with_docling(file_name: str, file_type: str, file_bytes: bytes)
         tmp.write(file_bytes)
         tmp_path = tmp.name
     try:
+        # Convert the temp file to a Docling document and export as markdown
         result = get_docling_converter().convert(tmp_path)
         return result.document.export_to_markdown().strip()
     finally:
+        # Remove the temp file to avoid littering the filesystem
         Path(tmp_path).unlink(missing_ok=True)  # Clean up temp file after conversion
 
 
@@ -156,12 +164,17 @@ def to_base64_images(file_type: str, file_bytes: bytes) -> list[tuple[str, str]]
     """Convert a file into a list of (MIME type, base64 string) tuples, one per page/image."""
     # Rasterize every PDF page to PNG so the vision model can consume the full document
     if file_type == "application/pdf":
+        # Convert each PDF page to a base64-encoded PNG image
         encoded_pages: list[tuple[str, str]] = []
+        # Use 200 dpi to balance quality and token size for LLM input
         for image in convert_from_bytes(file_bytes, dpi=200):  # 200 dpi balances quality and token size
+            # Encode each page image as base64 PNG
             buf = BytesIO()
             image.save(buf, format="PNG")
+            # Append the (MIME type, base64 string) tuple for this page
             encoded_pages.append(("image/png", base64.b64encode(buf.getvalue()).decode("utf-8")))
         return encoded_pages
+    # For raster images, return a single (MIME type, base64 string) tuple
     return [(file_type, base64.b64encode(file_bytes).decode("utf-8"))]
 
 
@@ -171,16 +184,20 @@ def build_multimodal_content(file_type: str, file_bytes: bytes) -> list[dict[str
     images = to_base64_images(file_type, file_bytes)
     prompt = "Extract information from this document image."
     if file_type == "application/pdf":
+        # Adjust prompt for multi-page PDFs
         prompt = (
             f"Extract information from this {len(images)}-page PDF document. "
             "Use all pages before returning JSON."
         )
-
+    # Start with the text prompt
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     # Append each page image with an optional page label for multi-page PDFs
     for page_number, (mime, image_b64) in enumerate(images, start=1):
         if file_type == "application/pdf":
+            # Add a page label before each PDF page image
             content.append({"type": "text", "text": f"PDF page {page_number}"})
+        
+        # Append the image URL for this page
         content.append(
             {
                 "type": "image_url",
@@ -203,36 +220,46 @@ def build_system_prompt(field_defs: list[dict[str, str]]) -> str:
         "Use null when a field is missing.",
         "Fields:",
     ]
-    # Append each field definition as a labelled bullet for the model to reference
-    lines.extend(f"- {field['name']}: {field['description'] or 'No description provided.'}" for field in field_defs)
+    
+    # Append each field definition as a labelled bullet for the model to reference in its output
+    for field in field_defs:
+        description = field['description'] or 'No description provided.'
+        lines.append(f"- {field['name']}: {description}")
+        
+    # Join all lines into a single prompt string
     return "\n".join(lines)
-
 
 ########################### Response Parsing ###########################
 
 
 def parse_json_content(content: Any) -> tuple[str, dict[str, Any]]:
-    """Parse LLM output into a (raw_string, parsed_dict) tuple, handling various response formats."""
+    """Parse LLM output into a (raw_string, parsed_dict) tuple, handling various response formats. list is used for multi-part messages from multimodal inputs."""
     # Handle dict responses directly without re-serializing
     if isinstance(content, dict):
         return json.dumps(content), content
-
-    # Concatenate multi-part message content into a single string
+    
+    # Concatenate multi-part message content into a single string when given a list of parts
     if isinstance(content, list):
-        parts = [
-            item
-            if isinstance(item, str)
-            else item.get("text", "")
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
-            else str(item)
-            for item in content
-        ]
+        parts = []
+        # Iterate through all parts
+        for item in content:
+            if isinstance(item, str):
+                # Keep string parts as-is
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                # Extract text from dict parts, handle dict with text key
+                parts.append(item.get("text", ""))
+            else:
+                parts.append(str(item))
+         # Join all parts into a single raw string       
         raw = "\n".join(parts).strip()
     else:
+        # Handle single string content directly
         raw = str(content).strip()
 
     # Strip markdown code fences that some models wrap around JSON output
     cleaned = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    # Parse and return the cleaned JSON content
     return raw, json.loads(cleaned)
 
 
@@ -280,6 +307,7 @@ def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name
             state["field_defs"],
             build_multimodal_content(file_type, file_bytes),
         )
+        # Return multimodal extraction results without Docling text
         return {
             "file_name": file_name,
             "mode": MODE_MM,
@@ -291,11 +319,13 @@ def run_extraction(file_name: str, file_type: str, file_bytes: bytes, model_name
     document_text = extract_text_with_docling(
         file_name, file_type, file_bytes
     )  # Convert to markdown for text-only extraction
+    # Perform text-based extraction using the Docling output
     raw_response, extracted_fields = extract_with_prompt(
         model_name,
         state["field_defs"],
         f"Extract information from this document content.\n\n{document_text}",
     )
+    # Return Docling+LLM extraction results with extracted text
     return {
         "file_name": file_name,
         "mode": MODE_DOCLING,
@@ -336,7 +366,9 @@ def render_results(result: ExtractionState) -> None:
         if isinstance(extracted_fields, dict)
         else {"extracted_data": json.dumps(extracted_fields, ensure_ascii=False)}
     )
+    # Generate CSV bytes for download
     csv_bytes = pd.DataFrame([normalized_for_csv]).to_csv(index=False).encode("utf-8")
+    # Provide a download button with a sensible default filename
     file_stem = Path(str(result.get("file_name", "extracted_data"))).stem
     st.download_button(
         label="Download CSV",
@@ -352,7 +384,7 @@ def render_results(result: ExtractionState) -> None:
     # Only show the Docling text expander when text-based extraction was used
     if result.get("mode") == MODE_DOCLING:
         with st.expander("Docling extracted text"):
-            st.text(result.get("document_text", ""))
+            st.write(result.get("document_text", ""))
 
 
 ########################### Streamlit Tab Renderers ###########################
@@ -365,24 +397,26 @@ def render_extract_tab() -> None:
         model_name = st.text_input("Ollama model", value=DEFAULT_MODEL_NAME)
         mode_label = st.radio("Extraction method", list(MODE_OPTIONS))
         uploaded_file = st.file_uploader("Upload invoice", type=SUPPORTED_UPLOAD_TYPES, key="upload_file")
-
+    # Map the selected mode label to its internal identifier
     mode = MODE_OPTIONS[mode_label]
 
     # Exit early when no file has been uploaded yet to avoid downstream errors
     if not uploaded_file:
         return
-
+    # Read the uploaded file bytes for processing
     file_bytes = uploaded_file.getvalue()
     st.write(f"File: `{uploaded_file.name}`")
+    # Render a preview of the uploaded file
     render_file_preview(uploaded_file.type, uploaded_file.name, file_bytes)
 
     # Trigger extraction and persist the result so it survives reruns
     if st.button("Extract Information", type="primary"):
         with st.spinner("Running extraction workflow..."):
+            # Store the extraction result in session state for later rendering
             st.session_state["extraction_result"] = run_extraction(
                 uploaded_file.name, uploaded_file.type, file_bytes, model_name, mode
             )
-
+    # Render extraction results if available in session state
     if st.session_state.get("extraction_result") is not None:
         render_results(st.session_state["extraction_result"])
 
